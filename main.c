@@ -12,10 +12,24 @@
 #include <ctype.h>
 #include <pthread.h>
 
+#define COLOR_BACKGROUND -1
+#define COLOR_FOREGROUND -1
+
+typedef struct{
+     int x;
+     int y;
+}Point_t;
+
 typedef struct{
      bool quit;
      int command_fd;
 }SendUserInputData_t;
+
+typedef struct{
+     int id;
+     int fg;
+     int bg;
+}Color_t;
 
 pid_t pid;
 
@@ -66,6 +80,28 @@ void* send_user_input_to_terminal(void* ptr)
      return NULL;
 }
 
+void color_change_foreground(Color_t* color, int fg)
+{
+     attroff(COLOR_PAIR(color->id));
+
+     color->id++;
+     color->fg = fg;
+     init_pair(color->id, color->fg, color->bg);
+
+     attron(COLOR_PAIR(color->id));
+}
+
+void color_change_background(Color_t* color, int bg)
+{
+     attroff(COLOR_PAIR(color->id));
+
+     color->id++;
+     color->bg = bg;
+     init_pair(color->id, color->fg, color->bg);
+
+     attron(COLOR_PAIR(color->id));
+}
+
 int main(int argc, char** argv)
 {
      int term_width;
@@ -82,7 +118,20 @@ int main(int argc, char** argv)
      cbreak();
      noecho();
 
+     if(has_colors() != TRUE){
+          fprintf(stderr, "%s doesn't support colors\n", getenv("TERM"));
+          return -1;
+     }
+
+     start_color();
+     use_default_colors();
+
      getmaxyx(window, term_height, term_width);
+
+     Color_t color;
+     color.id = 0;
+     color.fg = COLOR_FOREGROUND;
+     color.bg = COLOR_BACKGROUND;
 
      int command_fd = 0;
 
@@ -159,12 +208,10 @@ int main(int argc, char** argv)
           }
      }
 
-     char buffer[BUFSIZ];
      char bytes_read_from_terminal[BUFSIZ];
-     int buffer_end = 0;
-     int key = getch();
+     getch();
+     Point_t cursor;
 
-     memset(buffer, 0, BUFSIZ);
      memset(bytes_read_from_terminal, 0, BUFSIZ);
 
      SendUserInputData_t send_user_input_data = {false, command_fd};
@@ -176,6 +223,12 @@ int main(int argc, char** argv)
           endwin();
           return -1;
      }
+
+     bool escape = false;
+     bool csi = false;
+     char digit = '0';
+     char prev_digit = '0';
+     int graphics_change = 0;
 
      while(!send_user_input_data.quit){
           rc = read(command_fd, bytes_read_from_terminal, BUFSIZ);
@@ -189,21 +242,129 @@ int main(int argc, char** argv)
 
           char* read_byte = bytes_read_from_terminal;
           while(*read_byte){
-               if(isprint(*read_byte)){
-                    buffer[buffer_end] = *read_byte;
-                    buffer_end++;
+               if(escape){
+                    switch(*read_byte){
+                    default:
+                         break;
+                    case 'E':
+                         cursor.x = 0;
+                         cursor.y++;
+                         break;
+                    case '[':
+                         csi = true;
+                         break;
+                    }
+
+                    escape = false;
+               }else if(csi){
+                    if(isdigit(*read_byte)){
+                         prev_digit = digit;
+                         digit = *read_byte;
+                    }else{
+                         switch(*read_byte){
+                         default:
+                              break;
+                         case 'm':
+                         {
+                              char number_string[3] = {prev_digit, digit, 0};
+                              graphics_change = atoi(number_string);
+                              standend();
+
+                              // set color
+                              switch(graphics_change){
+                              default:
+                                   break;
+                              case 0:
+                                   standend();
+                                   color.fg = COLOR_FOREGROUND;
+                                   color.bg = COLOR_BACKGROUND;
+                                   break;
+                              case 1:
+                                   attron(A_BOLD);
+                                   break;
+                              case 30:
+                                   color_change_foreground(&color, COLOR_BLACK);
+                                   break;
+                              case 31:
+                                   color_change_foreground(&color, COLOR_RED);
+                                   break;
+                              case 32:
+                                   color_change_foreground(&color, COLOR_GREEN);
+                                   break;
+                              case 33:
+                                   color_change_foreground(&color, COLOR_YELLOW);
+                                   break;
+                              case 34:
+                                   color_change_foreground(&color, COLOR_BLUE);
+                                   break;
+                              case 35:
+                                   color_change_foreground(&color, COLOR_MAGENTA);
+                                   break;
+                              case 36:
+                                   color_change_foreground(&color, COLOR_CYAN);
+                                   break;
+                              case 37:
+                                   color_change_foreground(&color, COLOR_WHITE);
+                                   break;
+                              case 38: // TODO: underscore on
+                                   color_change_foreground(&color, COLOR_FOREGROUND);
+                                   break;
+                              case 39: // TODO: underscore off
+                                   color_change_foreground(&color, COLOR_FOREGROUND);
+                                   break;
+                              case 40:
+                                   color_change_background(&color, COLOR_BLACK);
+                                   break;
+                              case 41:
+                                   color_change_background(&color, COLOR_RED);
+                                   break;
+                              case 42:
+                                   color_change_background(&color, COLOR_GREEN);
+                                   break;
+                              case 43:
+                                   color_change_background(&color, COLOR_YELLOW);
+                                   break;
+                              case 44:
+                                   color_change_background(&color, COLOR_BLUE);
+                                   break;
+                              case 45:
+                                   color_change_background(&color, COLOR_MAGENTA);
+                                   break;
+                              case 46:
+                                   color_change_background(&color, COLOR_CYAN);
+                                   break;
+                              case 47:
+                                   color_change_background(&color, COLOR_WHITE);
+                                   break;
+                              case 49:
+                                   color_change_background(&color, COLOR_BACKGROUND);
+                                   break;
+                              }
+
+                              prev_digit = '0';
+                              digit = '0';
+
+                              csi = false;
+                         } break;
+                         }
+                    }
+               }else if(isprint(*read_byte)){
+                    mvprintw(cursor.y, cursor.x, "%c", *read_byte);
+                    cursor.x++;
                }else{
                     switch(*read_byte){
-                    case 0x08: // backspace
-                         buffer_end--;
-                         buffer[buffer_end] = 0;
-                         if(buffer_end < 0) buffer_end = 0;
+                    default:
+                         break;
+                    case 27: // escape: "Control Sequnce Introducer"
+                         escape = true;
+                         break;
+                    case 8: // backspace
+                         mvprintw(cursor.y, cursor.x, " ", *read_byte);
+                         cursor.x--;
                          break;
                     case '\n':
-                         buffer[buffer_end] = *read_byte;
-                         buffer_end++;
-                         break;
-                    default:
+                         cursor.x = 0;
+                         cursor.y++;
                          break;
                     }
                }
@@ -211,8 +372,7 @@ int main(int argc, char** argv)
                read_byte++;
           }
 
-          erase();
-          mvprintw(0, 0, "[te] %d %s", key, buffer);
+          move(cursor.y, cursor.x);
           refresh();
      }
 
