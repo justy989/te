@@ -11,6 +11,7 @@
 #include <pwd.h>
 #include <ctype.h>
 #include <pthread.h>
+#include <assert.h>
 
 #define COLOR_BACKGROUND -1
 #define COLOR_FOREGROUND -1
@@ -234,6 +235,8 @@ int main(int argc, char** argv)
      char prev_digit = '0';
 
      while(!send_user_input_data.quit){
+          getmaxyx(window, term_height, term_width);
+
           rc = read(command_fd, bytes_read_from_terminal, BUFSIZ);
           if(rc < 0){
                fprintf(stderr, "read() from shell failed: %s\n", strerror(errno));
@@ -279,41 +282,81 @@ int main(int argc, char** argv)
                                    abort();
                                    break;
                               case '@':
-                                   for(int i = 0; i < csi_arguments[0]; ++i){
+                              {
+                                   int count = csi_arguments[0];
+                                   if(count == 0) count = 1;
+
+                                   for(int i = 0; i < count; ++i){
                                         addch(' ');
                                    }
-                                   break;
+                              } break;
                               case 'A':
-                                   cursor.y -= csi_arguments[0];
-                                   break;
-                              case 'B':
-                                   cursor.y += csi_arguments[0];
-                                   break;
-                              case 'C':
-                                   cursor.x += csi_arguments[0];
-                                   break;
-                              case 'D':
-                                   cursor.x -= csi_arguments[0];
-                                   break;
-                              case 'E':
-                                   cursor.y += csi_arguments[0];
-                                   cursor.x = 0;
-                                   break;
-                              case 'F':
-                                   cursor.y -= csi_arguments[0];
-                                   cursor.x = 0;
-                                   break;
-                              case 'G':
-                                   cursor.x = csi_arguments[0] - 1;
-                                   if(cursor.x < 0) cursor.x = 0;
-                                   break;
-                              case 'H':
-                                   cursor.y = csi_arguments[0] - 1;
-                                   cursor.x = csi_arguments[1] - 1;
+                              {
+                                   int count = csi_arguments[0];
+                                   if(count == 0) count = 1;
 
-                                   if(cursor.y < 0) cursor.y = 0;
+                                   cursor.y -= count;
+                              } break;
+                              case 'B':
+                              case 'e':
+                              {
+                                   int count = csi_arguments[0];
+                                   if(count == 0) count = 1;
+
+                                   cursor.y += count;
+                              } break;
+                              case 'C':
+                              {
+                                   int count = csi_arguments[0];
+                                   if(count == 0) count = 1;
+
+                                   cursor.x += count;
+                              } break;
+                              case 'D':
+                              {
+                                   int count = csi_arguments[0];
+                                   if(count == 0) count = 1;
+
+                                   cursor.x -= count;
+                              } break;
+                              case 'E':
+                              {
+                                   int count = csi_arguments[0];
+                                   if(count == 0) count = 1;
+
+                                   cursor.y += count;
+                                   cursor.x = 0;
+                              } break;
+                              case 'F':
+                              {
+                                   int count = csi_arguments[0];
+                                   if(count == 0) count = 1;
+
+                                   cursor.y -= count;
+                                   cursor.x = 0;
+                              } break;
+                              case 'G':
+                              case '`':
+                              {
+                                   int count = csi_arguments[0];
+                                   if(count == 0) count = 1;
+
+                                   cursor.x = count - 1;
                                    if(cursor.x < 0) cursor.x = 0;
-                                   break;
+                              } break;
+                              case 'H':
+                              case 'f':
+                              {
+                                   int count = csi_arguments[0];
+                                   if(count == 0) count = 1;
+
+                                   cursor.y = count - 1;
+
+                                   count = csi_arguments[1];
+                                   if(count == 0) count = 1;
+
+                                   cursor.x = count - 1;
+                              } break;
                               case 'J':
                                    switch(csi_arguments[0]){
                                    default:
@@ -351,36 +394,28 @@ int main(int argc, char** argv)
                                         break;
                                    }
                                    break;
-                              //case 'L': // TODO: insert csi_arguments blank lines
-                              //     break;
                               case 'M':
                                    for(int i = 0; i < csi_arguments[0]; ++i){
                                         move(cursor.y + i, 0);
                                         clrtoeol();
                                    }
                                    break;
-                              //case 'P': // TODO: delete csi_arguments characters
-                              //     break;
-                              //case 'X': // TODO: erase csi_arguments characters (how is erase different from delete?)
-                              //     break;
                               case 'a':
-                                   cursor.x += csi_arguments[0];
-                                   break;
+                              {
+                                   int count = csi_arguments[0];
+                                   if(count == 0) count = 1;
+
+                                   cursor.x += count - 1;
+                              } break;
                               case 'c': // answer "I am a VT102"
                                    break;
                               case 'd':
-                                   cursor.y = csi_arguments[0] - 1;
-                                   if(cursor.y < 0) cursor.y = 0;
-                                   break;
-                              case 'e':
-                                   cursor.y += csi_arguments[0];
-                                   break;
-                              case 'f':
-                                   cursor.y = csi_arguments[0] - 1;
-                                   cursor.x = csi_arguments[1] - 1;
-                                   if(cursor.x < 0) cursor.x = 0;
-                                   if(cursor.y < 0) cursor.y = 0;
-                                   break;
+                              {
+                                   int count = csi_arguments[0];
+                                   if(count == 0) count = 1;
+
+                                   cursor.y = count - 1;
+                              } break;
                               case 'g':
                                    break;
                               case 's':
@@ -469,10 +504,14 @@ int main(int argc, char** argv)
                                         break;
                                    }
 
-                                   prev_digit = '0';
-                                   digit = '0';
                                    break;
                               }
+
+                              assert(cursor.x >= 0 && cursor.x <= term_width);
+                              assert(cursor.y >= 0 && cursor.y <= term_height);
+
+                              prev_digit = '0';
+                              digit = '0';
 
                               csi = false;
                               csi_argument_index = 0;
