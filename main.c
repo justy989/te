@@ -117,6 +117,7 @@ int main(int argc, char** argv)
      raw();
      cbreak();
      noecho();
+     scrollok(stdscr, TRUE);
 
      if(has_colors() != TRUE){
           fprintf(stderr, "%s doesn't support colors\n", getenv("TERM"));
@@ -185,7 +186,7 @@ int main(int argc, char** argv)
                setenv("USER", pw->pw_name, 1);
                setenv("SHELL", sh, 1);
                setenv("HOME", pw->pw_dir, 1);
-               setenv("TERM", "te", 1);
+               setenv("TERM", "dumb", 1);
 
                // resetting signals
                signal(SIGCHLD, SIG_DFL);
@@ -210,7 +211,8 @@ int main(int argc, char** argv)
 
      char bytes_read_from_terminal[BUFSIZ];
      getch();
-     Point_t cursor;
+     Point_t cursor = {0, 0};
+     Point_t save_cursor = {0, 0};
 
      memset(bytes_read_from_terminal, 0, BUFSIZ);
 
@@ -226,9 +228,10 @@ int main(int argc, char** argv)
 
      bool escape = false;
      bool csi = false;
+     int csi_arguments[16]; // NPAR, does it exist?
+     int csi_argument_index = 0;
      char digit = '0';
      char prev_digit = '0';
-     int graphics_change = 0;
 
      while(!send_user_input_data.quit){
           rc = read(command_fd, bytes_read_from_terminal, BUFSIZ);
@@ -261,91 +264,218 @@ int main(int argc, char** argv)
                          prev_digit = digit;
                          digit = *read_byte;
                     }else{
-                         switch(*read_byte){
-                         default:
-                              break;
-                         case 'm':
-                         {
-                              char number_string[3] = {prev_digit, digit, 0};
-                              graphics_change = atoi(number_string);
-                              standend();
+                         // NOTE: only needed for a subset of the options
+                         char number_string[3] = {prev_digit, digit, 0};
+                         csi_arguments[csi_argument_index] = atoi(number_string);
 
-                              // set color
-                              switch(graphics_change){
+                         if(*read_byte == ';'){
+                              // another argument incoming
+                              csi_argument_index++;
+                              prev_digit = '0';
+                              digit = '0';
+                         }else{
+                              switch(*read_byte){
                               default:
+                                   abort();
                                    break;
-                              case 0:
+                              case '@':
+                                   for(int i = 0; i < csi_arguments[0]; ++i){
+                                        addch(' ');
+                                   }
+                                   break;
+                              case 'A':
+                                   cursor.y -= csi_arguments[0];
+                                   break;
+                              case 'B':
+                                   cursor.y += csi_arguments[0];
+                                   break;
+                              case 'C':
+                                   cursor.x += csi_arguments[0];
+                                   break;
+                              case 'D':
+                                   cursor.x -= csi_arguments[0];
+                                   break;
+                              case 'E':
+                                   cursor.y += csi_arguments[0];
+                                   cursor.x = 0;
+                                   break;
+                              case 'F':
+                                   cursor.y -= csi_arguments[0];
+                                   cursor.x = 0;
+                                   break;
+                              case 'G':
+                                   cursor.x = csi_arguments[0] - 1;
+                                   if(cursor.x < 0) cursor.x = 0;
+                                   break;
+                              case 'H':
+                                   cursor.y = csi_arguments[0] - 1;
+                                   cursor.x = csi_arguments[1] - 1;
+
+                                   if(cursor.y < 0) cursor.y = 0;
+                                   if(cursor.x < 0) cursor.x = 0;
+                                   break;
+                              case 'J':
+                                   switch(csi_arguments[0]){
+                                   default:
+                                        clrtobot();
+                                        break;
+                                   case 1:
+                                   {
+                                        int count = (term_width * cursor.y) + cursor.x;
+
+                                        move(0, 0);
+                                        for(int i = 0; i < count; ++i){
+                                             addch(' ');
+                                        }
+                                   } break;
+                                   case 2:
+                                   case 3:
+                                        erase();
+                                        break;
+                                   }
+                                   break;
+                              case 'K':
+                                   switch(csi_arguments[0]){
+                                   default:
+                                        clrtoeol();
+                                        break;
+                                   case 1:
+                                        move(cursor.y, 0);
+                                        for(int i = 0; i < cursor.x; ++i){
+                                             addch(' ');
+                                        }
+                                        break;
+                                   case 2:
+                                        move(cursor.y, 0);
+                                        clrtoeol();
+                                        break;
+                                   }
+                                   break;
+                              //case 'L': // TODO: insert csi_arguments blank lines
+                              //     break;
+                              case 'M':
+                                   for(int i = 0; i < csi_arguments[0]; ++i){
+                                        move(cursor.y + i, 0);
+                                        clrtoeol();
+                                   }
+                                   break;
+                              //case 'P': // TODO: delete csi_arguments characters
+                              //     break;
+                              //case 'X': // TODO: erase csi_arguments characters (how is erase different from delete?)
+                              //     break;
+                              case 'a':
+                                   cursor.x += csi_arguments[0];
+                                   break;
+                              case 'c': // answer "I am a VT102"
+                                   break;
+                              case 'd':
+                                   cursor.y = csi_arguments[0] - 1;
+                                   if(cursor.y < 0) cursor.y = 0;
+                                   break;
+                              case 'e':
+                                   cursor.y += csi_arguments[0];
+                                   break;
+                              case 'f':
+                                   cursor.y = csi_arguments[0] - 1;
+                                   cursor.x = csi_arguments[1] - 1;
+                                   if(cursor.x < 0) cursor.x = 0;
+                                   if(cursor.y < 0) cursor.y = 0;
+                                   break;
+                              case 'g':
+                                   break;
+                              case 's':
+                                   save_cursor = cursor;
+                                   break;
+                              case 'u':
+                                   cursor = save_cursor;
+                                   break;
+                              case 'm':
                                    standend();
-                                   color.fg = COLOR_FOREGROUND;
-                                   color.bg = COLOR_BACKGROUND;
-                                   break;
-                              case 1:
-                                   attron(A_BOLD);
-                                   break;
-                              case 30:
-                                   color_change_foreground(&color, COLOR_BLACK);
-                                   break;
-                              case 31:
-                                   color_change_foreground(&color, COLOR_RED);
-                                   break;
-                              case 32:
-                                   color_change_foreground(&color, COLOR_GREEN);
-                                   break;
-                              case 33:
-                                   color_change_foreground(&color, COLOR_YELLOW);
-                                   break;
-                              case 34:
-                                   color_change_foreground(&color, COLOR_BLUE);
-                                   break;
-                              case 35:
-                                   color_change_foreground(&color, COLOR_MAGENTA);
-                                   break;
-                              case 36:
-                                   color_change_foreground(&color, COLOR_CYAN);
-                                   break;
-                              case 37:
-                                   color_change_foreground(&color, COLOR_WHITE);
-                                   break;
-                              case 38: // TODO: underscore on
-                                   color_change_foreground(&color, COLOR_FOREGROUND);
-                                   break;
-                              case 39: // TODO: underscore off
-                                   color_change_foreground(&color, COLOR_FOREGROUND);
-                                   break;
-                              case 40:
-                                   color_change_background(&color, COLOR_BLACK);
-                                   break;
-                              case 41:
-                                   color_change_background(&color, COLOR_RED);
-                                   break;
-                              case 42:
-                                   color_change_background(&color, COLOR_GREEN);
-                                   break;
-                              case 43:
-                                   color_change_background(&color, COLOR_YELLOW);
-                                   break;
-                              case 44:
-                                   color_change_background(&color, COLOR_BLUE);
-                                   break;
-                              case 45:
-                                   color_change_background(&color, COLOR_MAGENTA);
-                                   break;
-                              case 46:
-                                   color_change_background(&color, COLOR_CYAN);
-                                   break;
-                              case 47:
-                                   color_change_background(&color, COLOR_WHITE);
-                                   break;
-                              case 49:
-                                   color_change_background(&color, COLOR_BACKGROUND);
+
+                                   // set color
+                                   switch(csi_arguments[0]){
+                                   default:
+                                        break;
+                                   case 0:
+                                        standend();
+                                        color.fg = COLOR_FOREGROUND;
+                                        color.bg = COLOR_BACKGROUND;
+                                        break;
+                                   case 1:
+                                        attron(A_BOLD);
+                                        break;
+                                   case 7:
+                                        attron(A_REVERSE);
+                                        break;
+                                   case 27:
+                                        attroff(A_REVERSE);
+                                        break;
+                                   case 30:
+                                        color_change_foreground(&color, COLOR_BLACK);
+                                        break;
+                                   case 31:
+                                        color_change_foreground(&color, COLOR_RED);
+                                        break;
+                                   case 32:
+                                        color_change_foreground(&color, COLOR_GREEN);
+                                        break;
+                                   case 33:
+                                        color_change_foreground(&color, COLOR_YELLOW);
+                                        break;
+                                   case 34:
+                                        color_change_foreground(&color, COLOR_BLUE);
+                                        break;
+                                   case 35:
+                                        color_change_foreground(&color, COLOR_MAGENTA);
+                                        break;
+                                   case 36:
+                                        color_change_foreground(&color, COLOR_CYAN);
+                                        break;
+                                   case 37:
+                                        color_change_foreground(&color, COLOR_WHITE);
+                                        break;
+                                   case 38: // TODO: underscore on
+                                        color_change_foreground(&color, COLOR_FOREGROUND);
+                                        break;
+                                   case 39: // TODO: underscore off
+                                        color_change_foreground(&color, COLOR_FOREGROUND);
+                                        break;
+                                   case 40:
+                                        color_change_background(&color, COLOR_BLACK);
+                                        break;
+                                   case 41:
+                                        color_change_background(&color, COLOR_RED);
+                                        break;
+                                   case 42:
+                                        color_change_background(&color, COLOR_GREEN);
+                                        break;
+                                   case 43:
+                                        color_change_background(&color, COLOR_YELLOW);
+                                        break;
+                                   case 44:
+                                        color_change_background(&color, COLOR_BLUE);
+                                        break;
+                                   case 45:
+                                        color_change_background(&color, COLOR_MAGENTA);
+                                        break;
+                                   case 46:
+                                        color_change_background(&color, COLOR_CYAN);
+                                        break;
+                                   case 47:
+                                        color_change_background(&color, COLOR_WHITE);
+                                        break;
+                                   case 49:
+                                        color_change_background(&color, COLOR_BACKGROUND);
+                                        break;
+                                   }
+
+                                   prev_digit = '0';
+                                   digit = '0';
                                    break;
                               }
 
-                              prev_digit = '0';
-                              digit = '0';
-
                               csi = false;
-                         } break;
+                              csi_argument_index = 0;
                          }
                     }
                }else if(isprint(*read_byte)){
@@ -365,6 +495,10 @@ int main(int argc, char** argv)
                     case '\n':
                          cursor.x = 0;
                          cursor.y++;
+                         if(cursor.y >= term_height){
+                              scrl(1);
+                              cursor.y = term_height - 1;
+                         }
                          break;
                     }
                }
