@@ -9,6 +9,13 @@
 #include <unistd.h>
 #include <signal.h>
 #include <pwd.h>
+#include <ctype.h>
+#include <pthread.h>
+
+typedef struct{
+     bool quit;
+     int command_fd;
+}SendUserInputData_t;
 
 pid_t pid;
 
@@ -28,6 +35,35 @@ void handle_sigchld(int signal)
           fprintf(stderr, "child finished with error '%d'\n", stat);
           _exit(0);
      }
+}
+
+void* send_user_input_to_terminal(void* ptr)
+{
+     SendUserInputData_t* data = ptr;
+
+     while(true){
+          int key = getch();
+          if(key == 17){
+               data->quit = true;
+               break;
+          }
+
+          switch(key){
+          case 263: // convert backspace to actual backspace code
+               key = 8;
+               break;
+          }
+
+          char character = (char)(key);
+
+          int rc = write(data->command_fd, &character, 1);
+          if(rc < 0){
+               fprintf(stderr, "write() from shell failed: %s\n", strerror(errno));
+               break;
+          }
+     }
+
+     return NULL;
 }
 
 int main(int argc, char** argv)
@@ -123,59 +159,64 @@ int main(int argc, char** argv)
           }
      }
 
-     char output[BUFSIZ];
-     int last_char = 0;
+     char buffer[BUFSIZ];
+     char bytes_read_from_terminal[BUFSIZ];
+     int buffer_end = 0;
      int key = getch();
 
-     memset(output, 0, BUFSIZ);
+     memset(buffer, 0, BUFSIZ);
+     memset(bytes_read_from_terminal, 0, BUFSIZ);
 
-     int rc = read(command_fd, output, BUFSIZ);
-     if(rc < 0){
+     SendUserInputData_t send_user_input_data = {false, command_fd};
+     pthread_t user_input_thread;
+
+     int rc = pthread_create(&user_input_thread, NULL, send_user_input_to_terminal, &send_user_input_data);
+     if(rc != 0){
+          printf("pthread_create() failed\n");
           endwin();
-          fprintf(stderr, "read() from shell failed: %s\n", strerror(errno));
           return -1;
      }
 
-     last_char += rc;
-     output[last_char] = 0;
-
-     erase();
-     printw("[te] %d %s", key, output);
-     refresh();
-
-     while(true){
-          key = getch();
-          if(key == 17) break;
-          char character = (char)(key);
-
-          rc = write(command_fd, &character, 1);
-          if(rc < 0){
-               fprintf(stderr, "write() from shell failed: %s\n", strerror(errno));
-               endwin();
-               return -1;
-          }
-
-          int rc = read(command_fd, output + last_char, BUFSIZ - last_char);
+     while(!send_user_input_data.quit){
+          rc = read(command_fd, bytes_read_from_terminal, BUFSIZ);
           if(rc < 0){
                fprintf(stderr, "read() from shell failed: %s\n", strerror(errno));
                endwin();
                return -1;
           }
 
-          char* output_before_update = output + last_char;
+          bytes_read_from_terminal[rc] = 0;
 
-          last_char += rc;
-          output[last_char] = 0;
+          char* read_byte = bytes_read_from_terminal;
+          while(*read_byte){
+               if(isprint(*read_byte)){
+                    buffer[buffer_end] = *read_byte;
+                    buffer_end++;
+               }else{
+                    switch(*read_byte){
+                    case 0x08: // backspace
+                         buffer_end--;
+                         buffer[buffer_end] = 0;
+                         if(buffer_end < 0) buffer_end = 0;
+                         break;
+                    case '\n':
+                         buffer[buffer_end] = *read_byte;
+                         buffer_end++;
+                         break;
+                    default:
+                         break;
+                    }
+               }
 
-          // ncurses doesn't like the '\r'
-          for(int i = 0; i < rc; i++){
-               if(output_before_update[i] == '\r') output_before_update[i] = ' ';
+               read_byte++;
           }
 
           erase();
-          mvprintw(0, 0, "[te] %d %s", key, output);
+          mvprintw(0, 0, "[te] %d %s", key, buffer);
           refresh();
      }
+
+     pthread_join(user_input_thread, NULL);
 
      endwin();
      return 0;
